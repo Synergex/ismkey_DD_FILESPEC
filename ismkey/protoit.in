@@ -1,0 +1,1 @@
+ -platform=x86 -out=ismkey -expdir="C:\08891x-DD_FILESPEC\final\ismkey_DD_FILESPEC\ismkey\obj\x86\Debug\\proto\" "C:\08891x-DD_FILESPEC\final\ismkey_DD_FILESPEC\ismkey.dbl" "C:\08891x-DD_FILESPEC\final\ismkey_DD_FILESPEC\ismkey_test.dbl" "C:\08891x-DD_FILESPEC\final\ismkey_DD_FILESPEC\StopMessage.dbl"

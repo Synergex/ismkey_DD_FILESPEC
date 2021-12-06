@@ -1,0 +1,27 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 14
+VisualStudioVersion = 14.0.25420.1
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{BBD0F5D1-1CC4-42FD-BA4C-A96779C64378}") = "ismkey", "ismkey\ismkey.synproj", "{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Debug|x64.ActiveCfg = Debug|x64
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Debug|x64.Build.0 = Debug|x64
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Debug|x86.ActiveCfg = Debug|x86
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Debug|x86.Build.0 = Debug|x86
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Release|x64.ActiveCfg = Release|x64
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Release|x64.Build.0 = Release|x64
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Release|x86.ActiveCfg = Release|x86
+		{F0E7C5AE-9D24-4665-AE50-BCB3817CEB71}.Release|x86.Build.0 = Release|x86
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

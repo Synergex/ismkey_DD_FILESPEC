@@ -1,0 +1,755 @@
+;======================================================================
+;              Copyright 2000 by Synergex, International
+;
+;   Synergex provides this software under a license and may only be
+;     used in accordance with the terms and conditions of such
+;    license and with the inclusion of the above Copyright notice.
+;======================================================================
+; Module:       ISMKEY
+;
+; Facility:     Creates ISAMC parameters from Synergy/DE Repository
+;
+; Description:  Routine to create the parameters required by ISAMC
+;               from the Synergy/DE Repository
+;
+; 1.0.1  03-May-2000  Added support for compressing adjacent segments
+; 1.0.2  24-Oct-2000  Added a_merge argument, to allow segment compression to be optional
+; 1.0.3  09-Aug-2001  Added a_filename argument, to allow override of isam filename
+; 1.0.4  22-Apr-2010  Integrated ismkey.dbl & ismkey.def
+; 1.0.5  18-Apr-2012  Synergy v9 syntax & now match's ISINFO output
+; 1.0.6  24-Aug-2012  Throw exceptions
+; 1.0.6a 30-Dec-2016  Use DD_FILESPEC instead of DD_FILE to get file info. 
+;                     Support both explicit and implicit krf definitions for keys
+;
+; Requires Synergy/DE 9.5 (or later)
+;
+;
+; Assumptions:
+;
+; if the DCS argument is passed, then it must have been initialized by DD_INIT
+;
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+.define NM_KEYS         ,100                ;# of keys (Repository allows 99)
+.define NM_SEGS         ,8                  ;# of segments per key
+.define ST_SIZ          ,5+(NM_SEGS*6)+1    ;size of start section of key
+.define LN_SIZ          ,6+(NM_SEGS*6)+1    ;size of length section of key
+.define TY_SIZ          ,4+(NM_SEGS*9)+1    ;size of type section of key
+.define OR_SIZ          ,5+(NM_SEGS*2)+1    ;size of order section of key
+.define KEY_SIZ         ,9+7+8+12+9+20+12+12+1+ST_SIZ+LN_SIZ+TY_SIZ+OR_SIZ
+                                            ;size of key
+.define FIL_SIZ         ,255+9+10+14+11+9+6+120
+                                            ;size of filename specification
+.define DDINFO_STRUCTURE
+.include 'RPSLIB:ddinfo.def'
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+; create isam file from repository
+
+subroutine ismkey
+    opt inout   a_dcs           ,dcs    ;DCS control structure
+    opt in      a_str_name      ,a      ;RPS structure name (to create)
+    opt in      a_fil_name      ,a      ;RPS file name (to create)
+    opt out     a_filespec      ,a      ;ISAMC file specification
+    opt out     a_reclen        ,n      ;record length
+    opt out     a_num_keys      ,n      ;upper key (if passed, this should be zero or the max size of a_keyspec array)
+    opt out     a_keyspec       ,[*]a   ;array of keys
+    opt out     a_keyflds       ,[*]a   ;array of comma-delimited fieldnames in keys
+    opt in      a_log_file      ,a      ;audit log filename
+    opt in      a_merge         ,n      ;merge adjacent similar segments
+    opt in      a_revision      ,n      ;wanted ISAMC FILE OPTIONS for this ISAM revision
+endparams
+
+    external function
+        type_is_same    ,^val                   ;adjacent segments have same type
+        order_is_same   ,^val                   ;adjacent segments have same order
+    endexternal
+
+    stack record
+        ks              ,[#]string              ;key spec (for ISAMC)
+        kf              ,[#]string              ;key fields
+        ki              ,[#]string              ;key info
+        kn              ,[#]string              ;key name
+    endrecord
+
+    stack record clr_i
+        status          ,i4                     ;function return status
+        e1              ,i4                     ;general purpose error flag
+        e2              ,i4                     ;general purpose error flag
+        ctr             ,i4                     ;general purpose counter
+        chan            ,i4                     ;channel number
+        num_keys        ,i4                     ;upper access key number in use
+        key_no          ,i4                     ;key number counter
+        sglen           ,i4                     ;segment length
+        merge_segments  ,i4                     ;merge adjacent similar segments
+        show_default    ,i4                     ;show default options
+        checkOverlay    ,i4                     ;check keys for overlay fields
+        pos             ,i4                     ;position in string
+	krf_mode	,i4			;flag to indicate whether krf values are explicitly specified
+	krf_index	,i4			;alternate krf value to use when krfs are implicit
+    endrecord
+
+    stack record clr
+        filespec        ,a FIL_SIZ              ;file specification
+        keyspec         ,a KEY_SIZ              ;Key specification
+        keyflds         ,a 999 * (30 + 1)       ;key segment field names string (up to 999 fields)
+
+        st              ,a ST_SIZ               ;key segment start position string
+        ln              ,a LN_SIZ               ;key segment length string
+        ty              ,a TY_SIZ               ;key segment type string
+        or              ,a OR_SIZ               ;key segment order string
+        fdata           ,a120                   ;dummy data field
+        str_name        ,a30                    ;structure name
+        f_info          ,f_info
+        s_info          ,s_info
+        fl_info         ,fl_info
+	fls_info	,fls_info
+        k_info          ,k_info
+    endrecord
+
+    structure key_names_rec
+        key_nam         ,a ^size(kname)         ;key names for structure
+    endstructure
+
+proc
+
+    clear clr, ^i(clr_i)
+
+    status = 0                              ;no error
+
+    if (^passed(a_merge)) then
+        merge_segments = a_merge            ;merge adjacent similar key segments
+    else
+        clear merge_segments
+
+    show_default = 1
+    checkOverlay = 0
+
+    if (^passed(a_dcs)) then
+    begin
+        if (^passed(a_str_name) && a_str_name) then
+            str_name = a_str_name           ;use specified structure
+        else
+            str_name = a_dcs.sname          ;use DCS structure
+    end
+    else
+    begin
+        if (!^passed(a_str_name))
+            throw new ApplicationException("No Structure name provided to ismkey()")
+
+        xcall dd_init(a_dcs)
+        if (a_dcs.error)
+            throw new ApplicationException("Cannot initialize dcs in ismkey()")
+
+        str_name = a_str_name
+    end
+
+    if (!str_name)
+    begin
+        if (!^passed(a_fil_name))
+            throw new ApplicationException("No Structure name provided to ismkey()")
+
+        xcall dd_file(a_dcs, DDS_INFO, a_fil_name, fl_info)
+        if (a_dcs.error)
+            throw new ApplicationException("File:" + %atrim(a_fil_name) + " No info")
+
+        if (!fl_info.fli_struct)
+            throw new ApplicationException("File:" + %atrim(a_fil_name) + " No structure assigned")
+
+        str_name = fl_info.fli_struct
+    end
+
+    xcall dd_struct(a_dcs, DDS_INFO, str_name, s_info)
+    if (a_dcs.error)
+        throw new ApplicationException("Structure:" + %atrim(str_name) + " No info")
+
+    ;;must be assigned to a file
+    if (s_info.si_nmfils) then
+    begin
+	xcall DD_FILESPEC(a_dcs, s_info.si_file, str_name, fls_info)
+        if (a_dcs.error)
+            throw new ApplicationException("Structure:" + %atrim(str_name) + " File:" + %atrim(s_info.si_file) + " Error:" + %string(a_dcs.error))
+    end
+    else
+    begin
+        ;throw new ApplicationException("Structure:" + %atrim(str_name) + " No files assigned to structure")
+    end
+
+    ;any keys defineds
+    if (s_info.si_nmkeys < 1)
+        throw new ApplicationException("Structure:" + %atrim(str_name) + " No keys defined for structure")
+
+    kn = new string[s_info.si_nmkeys]
+    ki = new string[s_info.si_nmkeys]
+
+    call build_key_dets
+
+    if (num_keys)
+        call create_structure
+
+    clear ki, kn
+
+    if (^passed(a_dcs)) then
+        nop
+    else
+        xcall dd_exit(a_dcs)
+
+    xreturn
+
+;----------------------------------------------------------------------------
+
+build_key_dets,
+
+    clear num_keys
+
+    if (s_info.si_nmkeys)
+    begin
+        data    k_ptr       ,D_HANDLE               ;key name array pointer
+
+        ; allocate memory for key structures
+        k_ptr = %mem_proc(DM_ALLOC+DM_STATIC, (s_info.si_nmkeys*^size(key_names_rec)))
+
+        ; get a list of keys - by sequence instead of alphabetical order
+        ;xcall dd_key(a_dcs, DDK_LIST, s_info.si_nmkeys, ^m(key_names_rec, k_ptr))
+	xcall dd_key(a_dcs, DDK_SLIST, s_info.si_nmkeys, ^m(key_names_rec, k_ptr))
+        if (a_dcs.error)
+        begin
+            k_ptr = %mem_proc(DM_FREE, k_ptr)
+            throw new ApplicationException("Structure:" + %atrim(str_name) + " No key list")
+        end
+
+        ; initialize key structures
+        for key_no from 1 thru s_info.si_nmkeys
+        begin
+            kn[key_no] = ^m(key_names_rec[key_no], k_ptr)
+            clear ki[key_no]
+        end
+
+        ; release memory
+        k_ptr = %mem_proc(DM_FREE, k_ptr)
+
+;	;Initial loop to check whether kfr is explicit or implicit
+;	for key_no from 1 thru s_info.si_nmkeys
+;	begin
+;		; get key details
+;		xcall dd_key(a_dcs, DDK_INFO, kn[key_no], k_info)
+;		if (a_dcs.error)
+;		begin
+;			k_info.ki_ktype = KI_FOR
+;			;throw new ApplicationException("Structure:" + %atrim(str_name) + " key:" + kn[key_no])
+;		end
+;
+;		; is this an access key
+;		if (k_info.ki_ktype == KI_ACC)
+;		begin
+;		end
+;	end
+
+	;Initialize krf_mode. Possible values
+	;	0 - Naive mode
+	;	1 - Implicit krf values
+	;	2 - Explicit krf values
+	krf_mode = 0
+	krf_index = -1
+
+	for key_no from 1 thru s_info.si_nmkeys
+	begin
+		; get key details
+		xcall dd_key(a_dcs, DDK_INFO, kn[key_no], k_info)
+		if (a_dcs.error)
+		begin
+			k_info.ki_ktype = KI_FOR
+			;throw new ApplicationException("Structure:" + %atrim(str_name) + " key:" + kn[key_no])
+		end
+
+		; is this an access key
+		if (k_info.ki_ktype == KI_ACC)
+		begin
+
+			krf_index += 1
+			if (krf_index == 0) then
+			begin
+				;set krf_mode = 2 (explicit) if the first krf is eplicitly defined
+				if (k_info.ki_krf != 0) krf_mode = 2
+			end
+			else if (krf_index == 1) then
+			begin
+				;set krf_mode based on krf of second key, assuming that the first krf was 0
+				if (krf_mode != 2)
+				begin
+					if (k_info.ki_krf != 0) then krf_mode = 2
+					else krf_mode = 1
+				end
+			end
+			else
+			begin
+				;throw an exception if an explicit krf is found in implicit mode (krf_mode == 1)
+				if (krf_mode == 1 && k_info.ki_krf != 0)
+				begin
+					throw new ApplicationException("Structure:" + %atrim(str_name) + " key:" + %atrim(kn[key_no]) + " invalid keyno")
+				end
+			end
+
+			;update krf value if krf mode is implicit (krf should be zero if code has reached this point) 
+			if (krf_mode == 1) k_info.ki_krf = krf_index
+
+
+			; only store a key if the key number is within the acceptable range
+			if (k_info.ki_krf < s_info.si_nmkeys) then
+			begin
+				; only store the first occurance of a particular key number
+				if (!ki[k_info.ki_krf+1]) then
+				begin
+					ki[k_info.ki_krf+1] = (a)k_info
+					if (num_keys < k_info.ki_krf+1)
+					num_keys = k_info.ki_krf+1
+				end
+				else
+				begin
+					;if there's already an entry in the ki_krf+1 slot of the ki array, either:
+					;	1. ki_krf == 0 because all krf values are left blank to be automatically generated
+					;	2. ki_krf != 0 because it's a duplicate value, even though all krf values are specified, or
+					;	3. ki_krf == 0 but is still a duplicate value, even though all krf values are specified.
+					; In case 2, we can just throw an exception.
+					; Due to the krf_mode code, all instances of case 1 and some instances of case 3 will already be
+					; resolved by this point, so this code will throw an exception for any remaining case 2 or 3 issues.
+					throw new ApplicationException("Structure:" + %atrim(str_name) + " key:" + %atrim(kn[key_no]) + " duplicate keyno")
+				end
+			end
+			else
+			begin
+				throw new ApplicationException("Structure:" + %atrim(str_name) + " key:" + %atrim(kn[key_no]) + " invalid keyno")
+			end
+		end
+	end
+    end
+
+    return
+
+;----------------------------------------------------------------------------
+
+create_structure,
+
+    ks = new string[num_keys]
+    kf = new string[num_keys]
+
+    ; process each key
+    for key_no from 1 thru num_keys
+    begin
+        k_info = ki[key_no]
+
+        if (!k_info.ki_name)
+            throw new ApplicationException("Structure:" + %atrim(str_name) + " key:" + kn[key_no])
+
+        if (checkOverlay)
+        begin
+            for ctr from 1 thru k_info.ki_nmseg
+            begin
+                xcall dd_field(a_dcs, DDF_INFO, k_info.ki_fldnam(ctr), f_info)
+                if (a_dcs.error)
+                    throw new ApplicationException("Structure:" + %atrim(str_name) + " KEY field " + %atrim(k_info.ki_fldnam(ctr)) + " is invalid")
+                if (f_info.fi_ovrfld)
+                    throw new ApplicationException("Structure:" + %atrim(str_name) + " KEY field " + %atrim(k_info.ki_fldnam(ctr)) + " is overlay")
+            end
+        end
+
+        call create_keyspec
+        if (status == 0)
+        begin
+            ks[key_no] = keyspec
+            kf[key_no] = keyflds
+        end
+    end
+
+    ; all keys are ok - process filename
+    call create_filespec
+
+    ; log details
+    if (^passed(a_log_file) && a_log_file)
+        call log_details
+
+    ; return argument data
+    if (^passed(a_filespec))
+        a_filespec = filespec
+
+    if (^passed(a_reclen))
+        a_reclen = s_info.si_recsz
+
+    if (^passed(a_num_keys))
+    begin
+        if (a_num_keys > 0 && a_num_keys < num_keys)
+            num_keys = a_num_keys
+
+        a_num_keys = num_keys
+    end
+
+    if (^passed(a_keyspec))
+    begin
+        for key_no from 1 thru num_keys
+            a_keyspec[key_no] = ks[key_no]
+    end
+
+    if (^passed(a_keyflds))
+    begin
+        for key_no from 1 thru num_keys
+            a_keyflds[key_no] = kf[key_no]
+    end
+
+    clear ks
+    clear kf
+
+    return
+
+;----------------------------------------------------------------------------
+; The numbers are the max size allowed in the FILESPEC variable
+
+create_filespec,
+
+    filespec = fls_info.flsi_name        ;max 255 chars
+
+    using fls_info.flsi_rectyp select     ;max 9 chars
+    (FLI_VAR),      filespec = %atrim(filespec) + ', VARIABLE'
+    (FLI_MULT),     filespec = %atrim(filespec) + ', MULTIPLE'
+    (FLI_FIXED),    filespec = %atrim(filespec) + ', FIXED'
+    endusing
+
+    ;max 14 chars
+    if (fls_info.flsi_density)
+        filespec = %atrim(filespec) + ', DENSITY='+%string(fls_info.flsi_density)
+
+    ;max 11 chars
+    if (fls_info.flsi_staticrfa)
+        filespec = %atrim(filespec) + ', STATIC_RFA'
+
+    ;max 9 chars
+    if (fls_info.flsi_compress)
+        filespec = %atrim(filespec) + ', COMPRESS'
+
+    using fls_info.flsi_addressing select ;max 6 chars
+    (FLI_32BIT),    nop
+    (FLI_40BIT),    filespec = %atrim(filespec) + ', TBYTE'
+    endusing
+
+    ;;filespec = filespec(1:%trim(filespec)) + ', TRACK_CHANGES'
+
+    if (fls_info.flsi_portable)
+    begin                               ;max 120 chars
+        xcall dd_file(a_dcs, DDL_INFO, fls_info.flsi_portable, fdata)
+        if (!a_dcs.error)
+        begin
+            if (fdata != 'I')
+                a_dcs.error = 1
+        end
+        if (!a_dcs.error)
+            filespec = filespec(1:%trim(filespec)) + fdata
+    end
+
+    if(^passed(a_revision))
+    begin
+        using a_revision select
+        (4,5),
+        begin
+            if (fls_info.flsi_pagesize == FLI_PS1024)
+                fls_info.flsi_pagesize = -1
+        end
+        (6),
+        begin
+            if (fls_info.flsi_pagesize == FLI_PS4096)
+                fls_info.flsi_pagesize = -1
+        end
+        endusing
+    end
+
+    using fls_info.flsi_pagesize select   ;max 10 chars
+    (FLI_PS512),    filespec = %atrim(filespec) + ', PAGE=512'
+    (FLI_PS1024),   filespec = %atrim(filespec) + ', PAGE=1024'
+    (FLI_PS2048),   filespec = %atrim(filespec) + ', PAGE=2048'
+    (FLI_PS4096),   filespec = %atrim(filespec) + ', PAGE=4096'
+    (FLI_PS8192),   filespec = %atrim(filespec) + ', PAGE=8192'
+    (FLI_PS16384),  filespec = %atrim(filespec) + ', PAGE=16384'
+    (FLI_PS32768),  filespec = %atrim(filespec) + ', PAGE=32768'
+    endusing
+
+    return
+
+;----------------------------------------------------------------------------
+
+create_keyspec,
+
+    clear keyspec
+
+    ; make sure that all key segments are fields
+    for ctr from 1 thru k_info.ki_nmseg
+    begin
+        if (k_info.ki_segtyp(ctr) != KI_SG_FLD)
+            throw new ApplicationException("Invalid KEY " + %atrim(k_info.ki_name) + " Structure " + %atrim(str_name))
+    end
+
+    keyflds = k_info.ki_fldnam(1)
+
+    st = 'start=' + %string(k_info.ki_segpos(1))
+
+    ctr = 1
+    sglen = k_info.ki_seglen(ctr)
+
+    if (merge_segments)
+    begin
+        ; concatenate key segments (where same type and direction)
+        while(ctr < k_info.ki_nmseg &&
+&           k_info.ki_segpos(ctr+1) == (k_info.ki_segpos(ctr)+k_info.ki_seglen(ctr)) &&
+&           %type_is_same(k_info.ki_segdtyp(ctr+1), k_info.ki_segdtyp(ctr)) &&
+&           %order_is_same(k_info.ki_segord(ctr+1), k_info.ki_segord(ctr), k_info.ki_order))
+        begin
+            incr ctr
+            sglen += k_info.ki_seglen(ctr)
+        end
+    end
+
+    ln = 'length=' + %string(sglen)
+
+    using k_info.ki_segdtyp(1) select
+    (KI_SG_ALP),    ty = 'type=A' ;ALPHA
+    (KI_SG_NOC),    ty = 'type=N' ;NOCASE
+    (KI_SG_DEC),    ty = 'type=D' ;DECIMAL
+    (KI_SG_INT),    ty = 'type=I' ;INTEGER
+    (KI_SG_UNS),    ty = 'type=U' ;UNSIGNED
+    (),             clear ty
+    endusing
+
+    using k_info.ki_segord(1) select
+    (KI_SG_ASC),    or = 'order=A'
+    (KI_SG_DES),    or = 'order=D'
+    (),             clear or
+    endusing
+
+    ctr+=1
+    while(ctr <= k_info.ki_nmseg)
+    begin
+        keyflds = keyflds(1:%trim(keyflds)) + ',' + k_info.ki_fldnam(ctr)
+
+        st = st(1:%trim(st)) + ':' + %string(k_info.ki_segpos(ctr))
+        sglen = k_info.ki_seglen(ctr)
+
+        if (merge_segments)
+        begin
+            ; concatenate key segments (where same type and direction)
+            while(ctr < k_info.ki_nmseg &&
+&               k_info.ki_segpos(ctr+1) == (k_info.ki_segpos(ctr)+k_info.ki_seglen(ctr)) &&
+&               %type_is_same(k_info.ki_segdtyp(ctr+1), k_info.ki_segdtyp(ctr)) &&
+&               %order_is_same(k_info.ki_segord(ctr+1), k_info.ki_segord(ctr), k_info.ki_order))
+            begin
+                incr ctr
+                sglen += k_info.ki_seglen(ctr)
+            end
+        end
+
+        ln = ln(1:%trim(ln)) + ':' + %string(sglen)
+
+        using k_info.ki_segord(ctr) select
+        (KI_SG_ASC),    or = or(1:%trim(or)) + ':A'
+        (KI_SG_DES),    or = or(1:%trim(or)) + ':D'
+        endusing
+
+        using k_info.ki_segdtyp(ctr) select
+        (KI_SG_ALP),    ty = ty(1:%trim(ty)) + ':A' ;ALPHA
+        (KI_SG_NOC),    ty = ty(1:%trim(ty)) + ':N' ;NOCASE
+        (KI_SG_DEC),    ty = ty(1:%trim(ty)) + ':D' ;DECIMAL
+        (KI_SG_INT),    ty = ty(1:%trim(ty)) + ':I' ;INTEGER
+        (KI_SG_UNS),    ty = ty(1:%trim(ty)) + ':U' ;UNSIGNED
+        endusing
+
+        ctr += 1
+    end
+
+    keyspec = st(1:%trim(st)) + ', ' + ln(1:%trim(ln))
+
+    if (ty)
+    begin
+        ;replace any type of ' ' with 'A' (Alpha)
+        while(pos=%instr(1,ty,' :'))
+            ty(pos:1) = 'A'
+        if (ty(%trim(ty):1) == ':')
+            ty = ty(1:%trim(ty)) + 'A'
+        if (ty(1:5) == 'type=') then
+            keyspec = keyspec(1:%trim(keyspec)) + ', ' + ty(1:%trim(ty))
+        else
+            keyspec = keyspec(1:%trim(keyspec)) + ', type=' + ty(1:%trim(ty))
+    end
+
+    if(or)
+    begin
+        ;replace any order of ' ' with 'A' (ascending)
+        while(pos=%instr(1,or,' :'))
+            or(pos:1) = 'A'
+        if (or(%trim(or):1) == ':')
+            or = or(1:%trim(or)) + 'A'
+        if (or(1:6) == 'order=') then
+            keyspec = keyspec(1:%trim(keyspec)) + ', ' + or(1:%trim(or))
+        else
+            keyspec = keyspec(1:%trim(keyspec)) + ', order=' + or(1:%trim(or))
+    end
+
+    if(show_default)
+    begin
+        if(k_info.ki_name)
+            keyspec = keyspec(1:%trim(keyspec)) + ', name=' + k_info.ki_name(1:%trim(k_info.ki_name))
+    end
+
+    ;max 12 chars
+    if (k_info.ki_density)
+        keyspec = keyspec(1:%trim(keyspec)) + ', density='+%string(k_info.ki_density)
+
+    using k_info.ki_dups select ;max 7 chars
+    (KI_DPS),
+    begin
+        keyspec = keyspec(1:%trim(keyspec)) + ', dups'
+.ifndef OS_VMS
+        using k_info.ki_insert select ;max 8 chars
+        (KI_FRT),   keyspec = keyspec(1:%trim(keyspec)) + ', noatend'
+        (KI_END),   if(show_default) keyspec = keyspec(1:%trim(keyspec)) + ', atend'
+        endusing
+.endc
+    end
+    (KI_NDPS),  if(show_default>1) keyspec = keyspec(1:%trim(keyspec)) + ', nodups'
+    endusing
+
+    using k_info.ki_mod select ;max 9 chars
+    (KI_MDF),   keyspec = keyspec(1:%trim(keyspec)) + ', modify'
+    (KI_NMDF),  if(show_default>1) keyspec = keyspec(1:%trim(keyspec)) + ', nomodify'
+    endusing
+
+    if(!or)
+    begin
+        using k_info.ki_order select ;max 8 chars
+        (KI_DES),   keyspec = keyspec(1:%trim(keyspec)) + ', noascend'
+        (KI_ASC),   if(show_default>1) keyspec = keyspec(1:%trim(keyspec)) + ', ascend'
+        (),         if(show_default>1) keyspec = keyspec(1:%trim(keyspec)) + ', ascend'
+        endusing
+    end
+
+.ifdef OS_VMS
+    using k_info.ki_dups select
+    (KI_DPS),
+    begin
+        using ki_insert select ;max 8 chars
+        (KI_FRT),   keyspec = keyspec(1:%trim(keyspec)) + ', noatend'
+        (KI_END),   if(show_default>1) keyspec = keyspec(1:%trim(keyspec)) + ', atend'
+        endusing
+    end
+    endusing
+.endc
+
+.ifdef OS_VMS
+    ;max 29 chars
+    if (!k_info.ki_cmpidx)
+        keyspec = keyspec(1:%trim(keyspec)) + ', compress=noindex'
+    if (!k_info.ki_cmpkey)
+        keyspec = keyspec(1:%trim(keyspec)) + ', compress=nokey'
+    if (!k_info.ki_cmprec)
+        keyspec = keyspec(1:%trim(keyspec)) + ', compress=norecord'
+.endc
+
+    if(key_no > 1)
+    begin
+        using k_info.ki_null select     ;max 12 chars
+        (KI_REP),       keyspec = keyspec(1:%trim(keyspec)) + ', null=replicate'
+        (KI_NONREP),    keyspec = keyspec(1:%trim(keyspec)) + ', null=noreplicate'
+        (KI_SHORT),     keyspec = keyspec(1:%trim(keyspec)) + ', null=short'
+        ;(KI_NONULL),    nop
+        endusing
+
+        if (k_info.ki_nullval)
+        begin                       ;max 12+1 chars
+            xcall dd_key(a_dcs, DDK_TEXT, k_info.ki_nullval, fdata)
+            if (!a_dcs.error)
+                keyspec = keyspec(1:%trim(keyspec)) + ', value_null=' + fdata
+        end
+    end
+
+    return
+
+;----------------------------------------------------------------------------
+; write out ISAMC arguments to log file
+
+log_details,
+
+    open(chan=0, 'A', a_log_file) [ERR=noLogFile]
+
+    writes(chan, filespec(1:%trim(filespec)) + " RecLen=" + %string(s_info.si_recsz) + " NumKeys=" + %string(num_keys))
+
+    for key_no from 1 thru num_keys
+    begin
+        writes(chan, "Key"+%string(key_no-1)+"="+ks[key_no])
+    end
+
+    close chan
+
+noLogFile,
+
+    return
+
+endsubroutine
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+function order_is_same ,^VAL
+    req in  next_order      ,n          ;next segment order
+    req in  curr_order      ,n          ;current segment order
+    req in  def_order       ,n          ;default order (from key)
+    endparams
+
+proc
+
+    if (next_order == curr_order)
+        freturn 1
+
+    using next_order select
+    (KI_SG_ASC),
+        if (def_order == KI_ASC && curr_order != KI_SG_DES)
+            freturn 1
+    (KI_SG_DES),
+        if (def_order == KI_DES && curr_order != KI_SG_ASC)
+            freturn 1
+    (),
+        if ((def_order == KI_ASC && curr_order == KI_SG_ASC) ||
+&           (def_order == KI_DES && curr_order == KI_SG_DES))
+            freturn 1
+    endusing
+
+    freturn 0
+
+endfunction
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+function type_is_same ,^VAL
+    req in  next_type       ,n          ;next segment type
+    req in  curr_type       ,n          ;current segment type
+    endparams
+
+; routine should really check the data type of the fields that make up the segment
+; for now - assume that keys are alpha
+
+proc
+
+    if (next_type == curr_type)
+        freturn 1
+
+    using next_type select
+    (KI_SG_ALP),    nop
+    (KI_SG_NOC),    nop
+    (KI_SG_DEC),    nop
+    (KI_SG_INT),    nop
+    (KI_SG_UNS),    nop
+    (), if (curr_type == KI_SG_ALP)
+            freturn 1
+    endusing
+
+    freturn 0
+
+endfunction
+
+;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+;------------------------------------------------------------------------------
+;

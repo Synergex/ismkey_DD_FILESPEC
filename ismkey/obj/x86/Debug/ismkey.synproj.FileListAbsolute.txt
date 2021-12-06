@@ -1,0 +1,2 @@
+C:\08891x-DD_FILESPEC\final\ismkey_DD_FILESPEC\ismkey\bin\Debug\x86\ismkey.dbr
+C:\08891x-DD_FILESPEC\final\ismkey_DD_FILESPEC\ismkey\obj\x86\Debug\ismkey.dbr

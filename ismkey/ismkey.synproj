@@ -1,0 +1,95 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(SolutionDir)Common.props" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Configuration)' == '' ">x86</Platform>
+    <Name>ismkey</Name>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{f0e7c5ae-9d24-4665-ae50-bcb3817ceb71}</ProjectGuid>
+    <ProjectTypeGuids>{7B8CF543-378A-4EC1-BB1B-98E4DC6E6820};{BBD0F5D1-1CC4-42fd-BA4C-A96779C64378}</ProjectTypeGuids>
+    <Language>Synergy</Language>
+    <ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>None</ResolveAssemblyWarnOrErrorOnTargetArchitectureMismatch>
+    <PrototypeExpDirectory>proto</PrototypeExpDirectory>
+    <OutputType>Application</OutputType>
+    <EnableCommonProperties>True</EnableCommonProperties>
+    <CommonPropertiesFileLocation>$(SolutionDir)Common.props</CommonPropertiesFileLocation>
+    <DBL_qTrim>True</DBL_qTrim>
+    <DBL_qDebug>True</DBL_qDebug>
+    <DBL_qCheck>True</DBL_qCheck>
+    <DBL_qAlign>True</DBL_qAlign>
+    <DBL_qStrict>True</DBL_qStrict>
+    <Name>ismkey</Name>
+    <ProjEnvVars>RPSMFIL=$(SolutionDir)rps\rpsmain.ism;RPSTFIL=$(SolutionDir)rps\rpstext.ism;DATADIR=$(SolutionDir)dat\</ProjEnvVars>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x86' ">
+    <IncludeDebugInformation>true</IncludeDebugInformation>
+    <OutputPath>bin\Debug\x86\</OutputPath>
+    <PlatformTarget>x86</PlatformTarget>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+    <DebugOptimize>Debug</DebugOptimize>
+    <StartAction>Project</StartAction>
+    <StartProgram />
+    <StartURL />
+    <StartArguments>teststruct</StartArguments>
+    <StartWorkingDirectory />
+    <RemoteDebugEnabled>False</RemoteDebugEnabled>
+    <RemoteDebugMachine />
+    <EnableSQLServerDebugging>False</EnableSQLServerDebugging>
+    <UseVSHostingProcess>False</UseVSHostingProcess>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|x64' ">
+    <IncludeDebugInformation>true</IncludeDebugInformation>
+    <OutputPath>bin\Debug\x64\</OutputPath>
+    <PlatformTarget>x64</PlatformTarget>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+    <DebugOptimize>Debug</DebugOptimize>
+    <StartAction>Project</StartAction>
+    <StartProgram />
+    <StartURL />
+    <StartArguments>teststruct</StartArguments>
+    <StartWorkingDirectory />
+    <RemoteDebugEnabled>False</RemoteDebugEnabled>
+    <RemoteDebugMachine />
+    <EnableSQLServerDebugging>False</EnableSQLServerDebugging>
+    <UseVSHostingProcess>False</UseVSHostingProcess>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x86' ">
+    <IncludeDebugInformation>False</IncludeDebugInformation>
+    <OutputPath>bin\Release\x86\</OutputPath>
+    <PlatformTarget>x86</PlatformTarget>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+    <DebugOptimize>Optimize</DebugOptimize>
+    <StartAction>Project</StartAction>
+    <StartProgram />
+    <StartURL />
+    <StartArguments>teststruct</StartArguments>
+    <StartWorkingDirectory />
+    <RemoteDebugEnabled>False</RemoteDebugEnabled>
+    <RemoteDebugMachine />
+    <EnableSQLServerDebugging>False</EnableSQLServerDebugging>
+    <UseVSHostingProcess>False</UseVSHostingProcess>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|x64' ">
+    <IncludeDebugInformation>true</IncludeDebugInformation>
+    <OutputPath>bin\Release\x64\</OutputPath>
+    <PlatformTarget>x64</PlatformTarget>
+    <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
+    <DebugOptimize>Optimize</DebugOptimize>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\ismkey.dbl" />
+    <Compile Include="..\ismkey_test.dbl" />
+    <Compile Include="..\StopMessage.dbl" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="RPSLIB:ddlib.elb" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath)\Synergex\dbl\Synergex.SynergyDE.Traditional.targets" />
+  <PropertyGroup>
+    <PreBuildEvent>
+    </PreBuildEvent>
+    <PostBuildEvent>
+    </PostBuildEvent>
+  </PropertyGroup>
+</Project>

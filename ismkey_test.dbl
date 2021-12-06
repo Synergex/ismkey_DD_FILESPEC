@@ -1,0 +1,144 @@
+main ;ismkey
+
+; function key details
+.define NM_KEYS         ,100                ;# of keys (Repository allows 99)
+.define NM_SEGS         ,8                  ;# of segments per key
+.define ST_SIZ          ,5+(NM_SEGS*6)+1    ;size of start section of key
+.define LN_SIZ          ,6+(NM_SEGS*6)+1    ;size of lenght section of key
+.define TY_SIZ          ,4+(NM_SEGS*9)+1    ;size of type section of key
+.define OR_SIZ          ,5+(NM_SEGS*2)+1    ;size of order section of key
+.define KEY_SIZ         ,9+7+8+12+9+20+12+12+1+ST_SIZ+LN_SIZ+TY_SIZ+OR_SIZ
+                                            ;size of key
+.define FIL_SIZ         ,255+9+10+14+11+9+6+120
+                                            ;size of filename specification
+
+.ifdef DBLNET
+.define MAX_ARGS 2	;Assume that no more than 10 command line arguments are used
+.define MIN_ARGS 2	;Assume a minimum of 2 arguments, e.g. ismkey_test.exe structure_name
+.else
+.define MAX_ARGS 10	;Assume that no more than 10 command line arguments are used
+.define MIN_ARGS 3	;Assume a minimum of 3 arguments, e.g. dbr ismkey.dbr structure_name
+.endc
+;.ifdef DBLNET
+;.define MAX_ARGS 2
+;.define EXP_ARGS 2
+;.else
+;.define MAX_ARGS 4
+;.define EXP_ARGS 3
+;.endc
+	
+external function
+    mainprog    ,i
+record
+    stopStatus  ,i4
+    ttch	,i4
+    command	,a256
+    num_args	,i4
+    arg_pos	,[MAX_ARGS]i4
+    arg_len	,[MAX_ARGS]i4
+    str_name	,a30
+proc
+
+    ;get command line and examine the arguments
+    xcall CMDLN(command, num_args, arg_pos, arg_len)
+
+    ;by default, set the structure name to the last argument (assume that this will be the structure name)
+    if (num_args <= MAX_ARGS) str_name = command(arg_pos[num_args]:arg_len[num_args])
+    upcase str_name ; Structure names must be upper case
+
+    ;test the arguments to see if the user needs help, e.g. if there are too many or too few arguments
+    if(num_args < MIN_ARGS || num_args > MAX_ARGS || 
+    &		str_name .eqs. "--HELP" || str_name .eqs. "-H" || str_name .eqs. "/?")
+      begin
+	open(ttch, O, "TT:")
+.ifdef DBLNET
+	writes(ttch, "Usage: ismkey structname")
+.else
+	writes(ttch, "Usage: dbs ismkey structname")
+.endc
+	writes(ttch, "    'structname' (max 30 char.) - The target Repository structure.")
+	writes(ttch, "")
+	writes(ttch, "    Make sure that the appropriate environment variables are set to ")
+	writes(ttch, "    access the Repository, and that the structure is assigned to a ")
+	writes(ttch, "    file in the Repository.")
+	writes(ttch, "")
+	close ttch
+	stop
+      end
+
+    try
+        stopStatus = %mainprog(str_name)
+    catch (excp ,@Exception)
+    begin
+        open(ttch, O, 'TT:')
+        writes(ttch, excp.Message)
+        writes(ttch, excp.StackTrace)
+        close ttch
+.ifdef DBLNET
+        StopMessage()
+.endc ;DBLNET
+        stopStatus = D_EXIT_FAILURE
+    end
+    endtry
+    stop stopStatus
+end
+
+;;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+function mainprog ,i
+
+	a_str_name	,a30
+
+.include 'RPSLIB:ddinfo.def'
+
+;.include 'INC:ismkey.def'               ;function return values plus other defines
+
+.align
+stack record clr_i
+        status          ,i4                     ;function return status
+        num_keys        ,i4                     ;number of keys
+        reclen          ,i4                     ;record length
+
+.align
+stack record clr
+        filespec        ,a FIL_SIZ              ;file specification
+        key_spec        ,[ NM_KEYS ] a KEY_SIZ  ;key specifications (MUST BE REAL ARRAY)
+        str_name        ,a30                    ;structure name
+        log_file        ,a255                   ;log errors to this file name
+
+proc
+
+        clear clr, ^i(clr_i)
+
+        str_name = a_str_name
+        log_file = 'C:\errors.log'
+
+        xcall dd_init(dcs)
+        using error select
+        (E_OK),
+            begin
+		;generate file specification
+		xcall ismkey(dcs, str_name,, filespec, reclen, num_keys, key_spec,, log_file)
+		;generate ISAM file from specification
+		xcall isamc(%atrim(filespec), reclen, num_keys, key_spec)
+		xcall dd_exit(dcs)
+            end
+        (E_NOFIND),
+            throw new ApplicationException("RPS Record not found")
+        (E_OPNERR),
+            throw new ApplicationException("RPS Open error")
+        (E_INVFNC),
+            throw new ApplicationException("RPS Invalid Function")
+        (E_OPNERRM),
+            throw new ApplicationException("RPS Cannot open main file")
+        (E_OPNERRT),
+            throw new ApplicationException("RPS Cannot open text file")
+        (E_BADVERS),
+            throw new ApplicationException("RPS Incompatible version")
+        (),
+            throw new ApplicationException("DD_INIT error "+%string(error))
+        endusing
+
+        freturn D_EXIT_SUCCESS
+end
+
